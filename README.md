@@ -14,7 +14,7 @@ This project, 'Learning Path Predictor,' is an EdTech solution designed for stud
 
 Tick these off as you go, and commit after each one.
 
-- [ ] **1. Generate mock student course completion data as sequences of course IDs.**  
+- [x] **1. Generate mock student course completion data as sequences of course IDs.**  
       Hint: Use Python to programmatically create lists of sequential course IDs, simulating student enrollment histories.
 - [ ] **2. Pretrain a small language model on these course ID sequences.**  
       Hint: Apply the `lfretail-lfmarketbasket` techniques to fine-tune a small language model on your generated course ID sequences.
