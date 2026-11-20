@@ -658,10 +658,139 @@ def milestone_2(
     }
 
 
-# --- Milestone 3: Implement a function to predict the next likely course given a partial sequence.
-# Hint: Implement a function that uses your fine-tuned language model to predict the next likely course ID given a partial sequence of completed courses.
-def milestone_3():  # TODO(milestone 3)
-    raise NotImplementedError("TODO(milestone 3)")
+# -----------------------------------------------------------------------------
+# Milestone 3: Next Course Prediction for Partial Sequences
+# -----------------------------------------------------------------------------
+
+_DEFAULT_MODEL: Optional[CourseLanguageModel] = None
+
+
+def get_default_model(force_retrain: bool = False) -> CourseLanguageModel:
+    """Retrieve or initialize the default pretrained CourseLanguageModel."""
+    global _DEFAULT_MODEL
+    if _DEFAULT_MODEL is None or force_retrain:
+        sequences = generate_student_sequences(n_students=1000, seed=42)
+        model = CourseLanguageModel(
+            catalog=COURSE_CATALOG,
+            embedding_dim=32,
+            hidden_dim=64,
+            context_window=3,
+            seed=42,
+        )
+        model.fit(sequences, epochs=15, lr=0.01)
+        _DEFAULT_MODEL = model
+    return _DEFAULT_MODEL
+
+
+def predict_next_courses(
+    completed_courses: List[str],
+    top_n: int = 5,
+    model: Optional[CourseLanguageModel] = None,
+    enforce_prerequisites: bool = True,
+    alpha_lift: float = 0.3,
+) -> List[Dict[str, Any]]:
+    """Predict top N next likely courses given a student's partial sequence of completed courses.
+
+    Args:
+        completed_courses: List of course IDs the student has finished.
+        top_n: Number of recommendations to return.
+        model: Pretrained CourseLanguageModel (defaults to cached global model).
+        enforce_prerequisites: Only recommend courses whose prerequisites are satisfied.
+        alpha_lift: Market basket lift weight vs sequential LM prediction.
+
+    Returns:
+        List of course recommendations with IDs, titles, tracks, probabilities, and rationales.
+    """
+    if model is None:
+        model = get_default_model()
+
+    probs = model.predict_next_probabilities(completed_courses, alpha_lift=alpha_lift)
+
+    candidates: List[Dict[str, Any]] = []
+    completed_set = set(completed_courses)
+
+    for cid, prob in probs.items():
+        if cid in completed_set:
+            continue
+
+        meta = COURSE_CATALOG.get(cid, {})
+        prereqs = meta.get("prerequisites", [])
+        prereqs_met = all(p in completed_set for p in prereqs)
+
+        if enforce_prerequisites and not prereqs_met:
+            continue
+
+        track = meta.get("track", "General")
+        level = meta.get("level", 1)
+
+        if prereqs_met and prereqs:
+            prereq_str = ", ".join(prereqs)
+            rationale = f"Builds directly upon completed prerequisite(s): {prereq_str} in {track}."
+        elif not prereqs:
+            rationale = f"Foundational level {level} course introducing key concepts in {track}."
+        else:
+            rationale = f"Recommended step in the {track} specialization track."
+
+        candidates.append({
+            "course_id": cid,
+            "title": meta.get("title", cid),
+            "track": track,
+            "level": level,
+            "probability": float(prob),
+            "confidence_pct": round(float(prob) * 100.0, 1),
+            "prerequisites": prereqs,
+            "prerequisites_met": prereqs_met,
+            "description": meta.get("description", ""),
+            "rationale": rationale,
+        })
+
+    candidates.sort(key=lambda x: x["probability"], reverse=True)
+    top_candidates = candidates[:top_n]
+
+    total_top_p = sum(c["probability"] for c in top_candidates)
+    if total_top_p > 0:
+        for c in top_candidates:
+            c["relative_score"] = round((c["probability"] / total_top_p) * 100.0, 1)
+    else:
+        for c in top_candidates:
+            c["relative_score"] = round(100.0 / max(1, len(top_candidates)), 1)
+
+    return top_candidates
+
+
+def milestone_3(
+    test_sequences: Optional[List[List[str]]] = None,
+    model: Optional[CourseLanguageModel] = None,
+) -> Dict[str, Any]:
+    """Implement a function to predict the next likely course given a partial sequence.
+
+    Evaluates predictions across canonical student tracks and returns recommendations.
+    """
+    if model is None:
+        model = get_default_model()
+
+    if test_sequences is None:
+        test_sequences = [
+            ["CS101", "PY101"],                              # Data Science start
+            ["CS101", "PY101", "MATH101", "DS201", "STAT201"],# Full prep -> ML301
+            ["CS101", "WEB101"],                             # Web dev track
+            ["CS101", "NET101"],                             # Networking / Infrastructure
+        ]
+
+    evaluations: List[Dict[str, Any]] = []
+    for seq in test_sequences:
+        recs = predict_next_courses(seq, top_n=5, model=model)
+        evaluations.append({
+            "input_sequence": seq,
+            "recommendations": recs,
+            "top_course_id": recs[0]["course_id"] if recs else None,
+            "top_course_title": recs[0]["title"] if recs else None,
+        })
+
+    return {
+        "model_vocab_size": model.vocab_size,
+        "evaluations": evaluations,
+    }
 
 
 # --- Milestone 4: Create a Streamlit interface for students to input their completed courses and view recommendations.

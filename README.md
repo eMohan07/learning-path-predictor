@@ -18,7 +18,7 @@ Tick these off as you go, and commit after each one.
       Hint: Use Python to programmatically create lists of sequential course IDs, simulating student enrollment histories.
 - [x] **2. Pretrain a small language model on these course ID sequences.**  
       Hint: Apply the `lfretail-lfmarketbasket` techniques to fine-tune a small language model on your generated course ID sequences.
-- [ ] **3. Implement a function to predict the next likely course given a partial sequence.**  
+- [x] **3. Implement a function to predict the next likely course given a partial sequence.**  
       Hint: Implement a function that uses your fine-tuned language model to predict the next likely course ID given a partial sequence of completed courses.
 - [ ] **4. Create a Streamlit interface for students to input their completed courses and view recommendations.**  
       Hint: Build a Streamlit application with input fields for students to enter their completed courses and a section to display the model's recommendations.

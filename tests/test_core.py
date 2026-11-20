@@ -72,9 +72,44 @@ def test_milestone_2():
 
 
 # Milestone 3: Implement a function to predict the next likely course given a partial sequence.
-@pytest.mark.skip(reason="remove this line when you start milestone 3")
 def test_milestone_3():
-    raise NotImplementedError("write the test for milestone 3")
+    from app.core import milestone_3, predict_next_courses, COURSE_CATALOG, get_default_model
+
+    model = get_default_model()
+    result = milestone_3(model=model)
+
+    assert isinstance(result, dict)
+    assert "evaluations" in result
+    evals = result["evaluations"]
+    assert len(evals) >= 4
+
+    # Test individual prediction calls
+    ds_history = ["CS101", "PY101", "MATH101", "DS201", "STAT201"]
+    recs = predict_next_courses(ds_history, top_n=3, model=model)
+    assert len(recs) <= 3
+    assert len(recs) > 0
+
+    top_rec = recs[0]
+    assert "course_id" in top_rec
+    assert "title" in top_rec
+    assert "track" in top_rec
+    assert "probability" in top_rec
+    assert "confidence_pct" in top_rec
+    assert "rationale" in top_rec
+
+    # None of the completed courses should be recommended
+    rec_ids = [r["course_id"] for r in recs]
+    for cid in ds_history:
+        assert cid not in rec_ids
+
+    # For students with MATH101 + DS201 + STAT201, ML301 is the quintessential next step
+    assert "ML301" in rec_ids
+
+    # Prerequisites must be satisfied for all recommendations
+    for r in recs:
+        prereqs = COURSE_CATALOG[r["course_id"]]["prerequisites"]
+        for p in prereqs:
+            assert p in ds_history
 
 
 # Milestone 4: Create a Streamlit interface for students to input their completed courses and view recommendations.
