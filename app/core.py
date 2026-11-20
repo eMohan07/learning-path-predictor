@@ -570,40 +570,44 @@ class CourseLanguageModel:
     def predict_next_probabilities(
         self,
         completed_courses: List[str],
-        alpha_lift: float = 0.3,
+        alpha_lift: float = 0.35,
     ) -> Dict[str, float]:
         """Predict probability distribution over next courses given completed history.
 
         Blends autoregressive sequence likelihood with market basket lift adjustment.
         """
-        # Tokenize completed history
+        # Tokenize completed history including start-of-sequence token
         valid_ids = [self.token_to_id[c] for c in completed_courses if c in self.token_to_id]
-        if not valid_ids:
-            history = [self.bos_id]
-        else:
-            history = valid_ids
+        history = [self.bos_id] + valid_ids
 
-        # Construct padded context window
+        # Construct padded context window matching training representations
         ctx = history[max(0, len(history) - self.context_window):]
         padded_ctx = [self.pad_id] * (self.context_window - len(ctx)) + ctx
         ctx_array = np.array([padded_ctx], dtype=np.int32)
 
-        # Forward pass to obtain raw LM probability
+        # Forward pass to obtain raw autoregressive LM probability
         _, _, probs = self.forward(ctx_array)
         raw_probs = probs[0].copy()
 
-        # Item-to-item lift boost (from completed courses)
+        # Item-to-item lift boost (normalized lift = P(c|history) / P(c))
         lift_scores = np.zeros(self.vocab_size)
         if valid_ids and self.total_baskets > 0:
+            p_cand = np.maximum(self.item_counts, 1.0) / self.total_baskets
             for past_id in valid_ids:
                 co_counts = self.co_occurrence[past_id]
                 past_count = max(self.item_counts[past_id], 1.0)
-                # P(candidate | past)
                 cond_prob = co_counts / past_count
-                lift_scores += cond_prob
+                lift_scores += (cond_prob / p_cand)
             lift_scores /= len(valid_ids)
+            # Softmax or normalize lift scores over course tokens
+            c_indices = [self.token_to_id[c] for c in self.course_tokens]
+            lift_c = lift_scores[c_indices]
+            max_l = np.max(lift_c) if len(lift_c) > 0 else 0.0
+            exp_lift = np.exp(lift_c - max_l)
+            norm_lift = exp_lift / np.sum(exp_lift)
+            lift_scores[c_indices] = norm_lift
 
-        # Blend autoregressive LM probability with co-occurrence lift
+        # Blend autoregressive LM probability with normalized co-occurrence lift
         blended = (1.0 - alpha_lift) * raw_probs + alpha_lift * lift_scores
 
         # Filter out special tokens and courses already taken
@@ -795,8 +799,45 @@ def milestone_3(
 
 # --- Milestone 4: Create a Streamlit interface for students to input their completed courses and view recommendations.
 # Hint: Build a Streamlit application with input fields for students to enter their completed courses and a section to display the model's recommendations.
-def milestone_4():  # TODO(milestone 4)
-    raise NotImplementedError("TODO(milestone 4)")
+
+def milestone_4(
+    sample_completed: Optional[List[str]] = None,
+    top_n: int = 5,
+    model: Optional[CourseLanguageModel] = None,
+) -> Dict[str, Any]:
+    """Verify and package recommendation pipeline data for the Streamlit UI.
+
+    Ensures the recommendation engine produces structured, UI-ready payloads
+    including rankings, relative scores, confidence metrics, and prerequisite validations.
+    """
+    if sample_completed is None:
+        sample_completed = ["CS101", "PY101", "DS201"]
+
+    if model is None:
+        model = get_default_model()
+
+    recommendations = predict_next_courses(
+        completed_courses=sample_completed,
+        top_n=top_n,
+        model=model,
+        enforce_prerequisites=True,
+    )
+
+    catalog = COURSE_CATALOG
+    completed_details = [
+        {"course_id": cid, **catalog.get(cid, {})}
+        for cid in sample_completed
+        if cid in catalog
+    ]
+
+    return {
+        "status": "ready",
+        "input_completed_courses": sample_completed,
+        "completed_details": completed_details,
+        "top_n": top_n,
+        "recommendations": recommendations,
+        "total_catalog_courses": len(catalog),
+    }
 
 
 # --- Milestone 5: Analyze which course "itemsets" the model has learned.

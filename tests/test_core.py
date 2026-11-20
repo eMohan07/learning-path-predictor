@@ -113,9 +113,26 @@ def test_milestone_3():
 
 
 # Milestone 4: Create a Streamlit interface for students to input their completed courses and view recommendations.
-@pytest.mark.skip(reason="remove this line when you start milestone 4")
 def test_milestone_4():
-    raise NotImplementedError("write the test for milestone 4")
+    import py_compile
+    from app.core import milestone_4
+
+    # Ensure main app file is syntactically valid and clean
+    py_compile.compile("app/main.py", doraise=True)
+
+    result = milestone_4(sample_completed=["CS101", "PY101"], top_n=4)
+    assert isinstance(result, dict)
+    assert result["status"] == "ready"
+    assert result["top_n"] == 4
+    assert len(result["recommendations"]) == 4
+
+    for rec in result["recommendations"]:
+        assert "course_id" in rec
+        assert "title" in rec
+        assert "track" in rec
+        assert "relative_score" in rec
+        assert "confidence_pct" in rec
+        assert "rationale" in rec
 
 
 # Milestone 5: Analyze which course "itemsets" the model has learned.
