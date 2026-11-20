@@ -16,7 +16,7 @@ Tick these off as you go, and commit after each one.
 
 - [x] **1. Generate mock student course completion data as sequences of course IDs.**  
       Hint: Use Python to programmatically create lists of sequential course IDs, simulating student enrollment histories.
-- [ ] **2. Pretrain a small language model on these course ID sequences.**  
+- [x] **2. Pretrain a small language model on these course ID sequences.**  
       Hint: Apply the `lfretail-lfmarketbasket` techniques to fine-tune a small language model on your generated course ID sequences.
 - [ ] **3. Implement a function to predict the next likely course given a partial sequence.**  
       Hint: Implement a function that uses your fine-tuned language model to predict the next likely course ID given a partial sequence of completed courses.

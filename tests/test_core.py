@@ -43,9 +43,32 @@ def test_milestone_1():
 
 
 # Milestone 2: Pretrain a small language model on these course ID sequences.
-@pytest.mark.skip(reason="remove this line when you start milestone 2")
 def test_milestone_2():
-    raise NotImplementedError("write the test for milestone 2")
+    from app.core import milestone_2, CourseLanguageModel
+
+    result = milestone_2(epochs=10, seed=42)
+    assert isinstance(result, dict)
+    assert "model" in result
+    assert "history" in result
+    assert "initial_loss" in result
+    assert "final_loss" in result
+    assert "val_perplexity" in result
+
+    model = result["model"]
+    assert isinstance(model, CourseLanguageModel)
+    assert model.vocab_size > 20
+
+    # Ensure model learned: loss should decrease
+    assert result["final_loss"] < result["initial_loss"]
+    assert result["val_perplexity"] > 0
+    assert result["val_perplexity"] < model.vocab_size
+
+    # Test probability distribution output
+    probs = model.predict_next_probabilities(["CS101", "PY101"])
+    assert isinstance(probs, dict)
+    assert "CS101" not in probs  # Already completed courses excluded
+    assert "PY101" not in probs
+    assert abs(sum(probs.values()) - 1.0) < 1e-4
 
 
 # Milestone 3: Implement a function to predict the next likely course given a partial sequence.

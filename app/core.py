@@ -349,10 +349,313 @@ def milestone_1(
     }
 
 
-# --- Milestone 2: Pretrain a small language model on these course ID sequences.
-# Hint: Apply the `lfretail-lfmarketbasket` techniques to fine-tune a small language model on your generated course ID sequences.
-def milestone_2():  # TODO(milestone 2)
-    raise NotImplementedError("TODO(milestone 2)")
+# -----------------------------------------------------------------------------
+# Milestone 2: Pretrain a Small Language Model on Course Sequences
+# -----------------------------------------------------------------------------
+
+class CourseLanguageModel:
+    """A lightweight autoregressive language model for sequential course path prediction.
+
+    Pretrained on student course ID sequences using next-token cross-entropy loss.
+    Incorporates token embeddings, a context projection layer, softmax output distribution,
+    and Item-to-Item co-occurrence matrices inspired by market basket analysis.
+    """
+
+    PAD_TOKEN = "<pad>"
+    BOS_TOKEN = "<s>"
+    EOS_TOKEN = "</s>"
+
+    def __init__(
+        self,
+        catalog: Optional[Dict[str, Dict[str, Any]]] = None,
+        embedding_dim: int = 32,
+        hidden_dim: int = 64,
+        context_window: int = 3,
+        seed: int = 42,
+    ):
+        self.catalog = catalog or COURSE_CATALOG
+        self.embedding_dim = embedding_dim
+        self.hidden_dim = hidden_dim
+        self.context_window = context_window
+        self.seed = seed
+        self.rng = np.random.default_rng(seed)
+
+        # Build vocabulary
+        self.special_tokens = [self.PAD_TOKEN, self.BOS_TOKEN, self.EOS_TOKEN]
+        self.course_tokens = sorted(self.catalog.keys())
+        self.vocab = self.special_tokens + self.course_tokens
+        self.token_to_id = {tok: idx for idx, tok in enumerate(self.vocab)}
+        self.id_to_token = {idx: tok for idx, tok in enumerate(self.vocab)}
+        self.vocab_size = len(self.vocab)
+
+        self.pad_id = self.token_to_id[self.PAD_TOKEN]
+        self.bos_id = self.token_to_id[self.BOS_TOKEN]
+        self.eos_id = self.token_to_id[self.EOS_TOKEN]
+
+        # Weights initialization
+        self._init_weights()
+
+        # Co-occurrence & Item-To-Item tracking (Market Basket techniques)
+        self.co_occurrence = np.zeros((self.vocab_size, self.vocab_size), dtype=np.float64)
+        self.item_counts = np.zeros(self.vocab_size, dtype=np.float64)
+        self.total_baskets = 0
+
+    def _init_weights(self) -> None:
+        """Initialize neural network weights using He/Xavier normal distribution."""
+        bound_e = np.sqrt(1.0 / self.embedding_dim)
+        bound_h = np.sqrt(2.0 / (self.context_window * self.embedding_dim))
+        bound_o = np.sqrt(2.0 / self.hidden_dim)
+
+        self.W_e = self.rng.normal(0.0, bound_e, (self.vocab_size, self.embedding_dim))
+        self.W_h = self.rng.normal(0.0, bound_h, (self.context_window * self.embedding_dim, self.hidden_dim))
+        self.b_h = np.zeros(self.hidden_dim, dtype=np.float64)
+        self.W_o = self.rng.normal(0.0, bound_o, (self.hidden_dim, self.vocab_size))
+        self.b_o = np.zeros(self.vocab_size, dtype=np.float64)
+
+    def _prepare_training_data(self, sequences: List[List[str]]) -> Tuple[np.ndarray, np.ndarray]:
+        """Convert sequences of course IDs into (context_window, target) integer arrays."""
+        contexts: List[List[int]] = []
+        targets: List[int] = []
+
+        for seq in sequences:
+            token_ids = [self.token_to_id[c] for c in seq if c in self.token_to_id]
+            if not token_ids:
+                continue
+
+            full_seq = [self.bos_id] + token_ids + [self.eos_id]
+
+            for i in range(1, len(full_seq)):
+                target = full_seq[i]
+                history = full_seq[max(0, i - self.context_window):i]
+                # Pad to the left if history is shorter than context_window
+                padded = [self.pad_id] * (self.context_window - len(history)) + history
+                contexts.append(padded)
+                targets.append(target)
+
+        return np.array(contexts, dtype=np.int32), np.array(targets, dtype=np.int32)
+
+    def _update_co_occurrences(self, sequences: List[List[str]]) -> None:
+        """Update pairwise co-occurrence frequencies across course histories."""
+        self.total_baskets += len(sequences)
+        for seq in sequences:
+            ids = [self.token_to_id[c] for c in seq if c in self.token_to_id]
+            unique_ids = list(set(ids))
+            for i in unique_ids:
+                self.item_counts[i] += 1
+                for j in unique_ids:
+                    self.co_occurrence[i, j] += 1
+
+    def forward(self, contexts: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Forward pass through the embedding and hidden layers to logits and softmax probabilities."""
+        batch_size = contexts.shape[0]
+        # Embeddings lookup: (batch, context_window, embedding_dim) -> (batch, context_window * embedding_dim)
+        emb = self.W_e[contexts].reshape(batch_size, self.context_window * self.embedding_dim)
+        # Hidden layer with ReLU
+        z_h = emb @ self.W_h + self.b_h
+        a_h = np.maximum(0.0, z_h)
+        # Output logits
+        logits = a_h @ self.W_o + self.b_o
+        # Stable softmax
+        logits_max = np.max(logits, axis=-1, keepdims=True)
+        exp_logits = np.exp(logits - logits_max)
+        probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+        return emb, a_h, probs
+
+    def fit(
+        self,
+        sequences: List[List[str]],
+        epochs: int = 15,
+        batch_size: int = 64,
+        lr: float = 0.01,
+        log_callback: Optional[Any] = None,
+    ) -> List[Dict[str, float]]:
+        """Pretrain the language model on course sequences using Adam optimization.
+
+        Returns a list of dicts with training history per epoch.
+        """
+        self._update_co_occurrences(sequences)
+        contexts, targets = self._prepare_training_data(sequences)
+        n_samples = len(contexts)
+
+        if n_samples == 0:
+            return []
+
+        # Adam optimizer state
+        m_We, v_We = np.zeros_like(self.W_e), np.zeros_like(self.W_e)
+        m_Wh, v_Wh = np.zeros_like(self.W_h), np.zeros_like(self.W_h)
+        m_bh, v_bh = np.zeros_like(self.b_h), np.zeros_like(self.b_h)
+        m_Wo, v_Wo = np.zeros_like(self.W_o), np.zeros_like(self.W_o)
+        m_bo, v_bo = np.zeros_like(self.b_o), np.zeros_like(self.b_o)
+
+        beta1, beta2, eps = 0.9, 0.999, 1e-8
+        t = 0
+        history: List[Dict[str, float]] = []
+
+        for epoch in range(epochs):
+            indices = np.arange(n_samples)
+            self.rng.shuffle(indices)
+
+            epoch_losses: List[float] = []
+
+            for start in range(0, n_samples, batch_size):
+                t += 1
+                end = min(start + batch_size, n_samples)
+                b_idx = indices[start:end]
+                b_ctx = contexts[b_idx]
+                b_tar = targets[b_idx]
+                curr_b = len(b_idx)
+
+                # Forward pass
+                emb, a_h, probs = self.forward(b_ctx)
+
+                # Cross-entropy loss
+                target_probs = probs[np.arange(curr_b), b_tar]
+                loss = -np.mean(np.log(np.maximum(target_probs, 1e-12)))
+                epoch_losses.append(float(loss))
+
+                # Backward pass
+                d_logits = probs.copy()
+                d_logits[np.arange(curr_b), b_tar] -= 1.0
+                d_logits /= curr_b
+
+                d_Wo = a_h.T @ d_logits
+                d_bo = np.sum(d_logits, axis=0)
+
+                d_ah = d_logits @ self.W_o.T
+                d_zh = d_ah * (a_h > 0.0)
+
+                d_Wh = emb.T @ d_zh
+                d_bh = np.sum(d_zh, axis=0)
+
+                d_emb = (d_zh @ self.W_h.T).reshape(curr_b, self.context_window, self.embedding_dim)
+
+                # Gradient update helper with Adam
+                def adam_update(param, grad, m, v):
+                    m[:] = beta1 * m + (1.0 - beta1) * grad
+                    v[:] = beta2 * v + (1.0 - beta2) * (grad ** 2)
+                    m_hat = m / (1.0 - beta1 ** t)
+                    v_hat = v / (1.0 - beta2 ** t)
+                    param -= lr * m_hat / (np.sqrt(v_hat) + eps)
+
+                adam_update(self.W_o, d_Wo, m_Wo, v_Wo)
+                adam_update(self.b_o, d_bo, m_bo, v_bo)
+                adam_update(self.W_h, d_Wh, m_Wh, v_Wh)
+                adam_update(self.b_h, d_bh, m_bh, v_bh)
+
+                # Accumulate and update embedding gradients
+                d_We = np.zeros_like(self.W_e)
+                for pos in range(self.context_window):
+                    np.add.at(d_We, b_ctx[:, pos], d_emb[:, pos, :])
+                adam_update(self.W_e, d_We, m_We, v_We)
+
+            mean_loss = float(np.mean(epoch_losses))
+            rec = {"epoch": epoch + 1, "loss": mean_loss, "perplexity": float(np.exp(min(mean_loss, 20.0)))}
+            history.append(rec)
+            if log_callback:
+                log_callback(rec)
+
+        return history
+
+    def compute_perplexity(self, sequences: List[List[str]]) -> float:
+        """Compute the validation perplexity on unseen course sequences."""
+        contexts, targets = self._prepare_training_data(sequences)
+        if len(contexts) == 0:
+            return 1.0
+
+        _, _, probs = self.forward(contexts)
+        target_probs = probs[np.arange(len(targets)), targets]
+        cross_entropy = -np.mean(np.log(np.maximum(target_probs, 1e-12)))
+        return float(np.exp(min(cross_entropy, 20.0)))
+
+    def predict_next_probabilities(
+        self,
+        completed_courses: List[str],
+        alpha_lift: float = 0.3,
+    ) -> Dict[str, float]:
+        """Predict probability distribution over next courses given completed history.
+
+        Blends autoregressive sequence likelihood with market basket lift adjustment.
+        """
+        # Tokenize completed history
+        valid_ids = [self.token_to_id[c] for c in completed_courses if c in self.token_to_id]
+        if not valid_ids:
+            history = [self.bos_id]
+        else:
+            history = valid_ids
+
+        # Construct padded context window
+        ctx = history[max(0, len(history) - self.context_window):]
+        padded_ctx = [self.pad_id] * (self.context_window - len(ctx)) + ctx
+        ctx_array = np.array([padded_ctx], dtype=np.int32)
+
+        # Forward pass to obtain raw LM probability
+        _, _, probs = self.forward(ctx_array)
+        raw_probs = probs[0].copy()
+
+        # Item-to-item lift boost (from completed courses)
+        lift_scores = np.zeros(self.vocab_size)
+        if valid_ids and self.total_baskets > 0:
+            for past_id in valid_ids:
+                co_counts = self.co_occurrence[past_id]
+                past_count = max(self.item_counts[past_id], 1.0)
+                # P(candidate | past)
+                cond_prob = co_counts / past_count
+                lift_scores += cond_prob
+            lift_scores /= len(valid_ids)
+
+        # Blend autoregressive LM probability with co-occurrence lift
+        blended = (1.0 - alpha_lift) * raw_probs + alpha_lift * lift_scores
+
+        # Filter out special tokens and courses already taken
+        taken_set = set(completed_courses)
+        course_probs: Dict[str, float] = {}
+
+        for cid in self.course_tokens:
+            if cid in taken_set:
+                continue
+            idx = self.token_to_id[cid]
+            course_probs[cid] = float(blended[idx])
+
+        # Normalize remaining probabilities
+        total = sum(course_probs.values())
+        if total > 0:
+            course_probs = {cid: p / total for cid, p in course_probs.items()}
+        else:
+            uniform = 1.0 / max(1, len(course_probs))
+            course_probs = {cid: uniform for cid in course_probs}
+
+        return course_probs
+
+
+def milestone_2(
+    sequences: Optional[List[List[str]]] = None,
+    epochs: int = 15,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Pretrain a small language model on student course ID sequences.
+
+    Returns:
+        dict containing 'model', 'history', 'initial_loss', 'final_loss', and 'perplexity'.
+    """
+    if sequences is None:
+        sequences = generate_student_sequences(n_students=800, seed=seed)
+
+    split = int(0.8 * len(sequences))
+    train_seqs = sequences[:split]
+    val_seqs = sequences[split:]
+
+    model = CourseLanguageModel(catalog=COURSE_CATALOG, embedding_dim=32, hidden_dim=64, context_window=3, seed=seed)
+    history = model.fit(train_seqs, epochs=epochs, lr=0.01)
+    val_perplexity = model.compute_perplexity(val_seqs)
+
+    return {
+        "model": model,
+        "history": history,
+        "initial_loss": history[0]["loss"] if history else 0.0,
+        "final_loss": history[-1]["loss"] if history else 0.0,
+        "val_perplexity": val_perplexity,
+        "vocab_size": model.vocab_size,
+    }
 
 
 # --- Milestone 3: Implement a function to predict the next likely course given a partial sequence.
