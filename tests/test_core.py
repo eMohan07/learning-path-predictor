@@ -136,7 +136,34 @@ def test_milestone_4():
 
 
 # Milestone 5: Analyze which course "itemsets" the model has learned.
-@pytest.mark.skip(reason="remove this line when you start milestone 5")
 def test_milestone_5():
-    raise NotImplementedError("write the test for milestone 5")
+    from app.core import milestone_5, analyze_learned_itemsets, get_default_model
+
+    model = get_default_model()
+    result = milestone_5(model=model, min_support=0.02)
+
+    assert isinstance(result, dict)
+    assert result["status"] == "completed"
+    assert result["total_itemsets"] > 0
+    assert result["total_rules"] > 0
+    assert len(result["frequent_itemsets"]) > 0
+    assert len(result["association_rules"]) > 0
+
+    # Verify frequent itemset properties
+    first_itemset = result["frequent_itemsets"][0]
+    assert "items" in first_itemset
+    assert "size" in first_itemset
+    assert "support" in first_itemset
+    assert first_itemset["size"] >= 2
+    assert first_itemset["support"] > 0
+
+    # Verify association rule properties
+    first_rule = result["association_rules"][0]
+    assert "antecedent" in first_rule
+    assert "consequent" in first_rule
+    assert "support" in first_rule
+    assert "confidence" in first_rule
+    assert "lift" in first_rule
+    assert first_rule["confidence"] > 0
+    assert first_rule["lift"] > 0
 

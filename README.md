@@ -22,7 +22,7 @@ Tick these off as you go, and commit after each one.
       Hint: Implement a function that uses your fine-tuned language model to predict the next likely course ID given a partial sequence of completed courses.
 - [x] **4. Create a Streamlit interface for students to input their completed courses and view recommendations.**  
       Hint: Build a Streamlit application with input fields for students to enter their completed courses and a section to display the model's recommendations.
-- [ ] **5. Analyze which course "itemsets" the model has learned.**  
+- [x] **5. Analyze which course "itemsets" the model has learned.**  
       Hint: Inspect the model's learned representations or attention patterns to identify frequently co-occurring course 'itemsets,' similar to analyzing market basket data.
 
 ## Run it

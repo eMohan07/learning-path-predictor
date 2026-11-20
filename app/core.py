@@ -630,6 +630,50 @@ class CourseLanguageModel:
 
         return course_probs
 
+    def sample_sequence(
+        self,
+        seed_course: Optional[str] = None,
+        max_length: int = 8,
+        temperature: float = 1.0,
+    ) -> List[str]:
+        """Autoregressively sample a course sequence from the model."""
+        history = [self.bos_id]
+        if seed_course and seed_course in self.token_to_id:
+            history.append(self.token_to_id[seed_course])
+
+        sampled_courses: List[str] = [seed_course] if seed_course else []
+
+        for _ in range(max_length):
+            ctx = history[max(0, len(history) - self.context_window):]
+            padded_ctx = [self.pad_id] * (self.context_window - len(ctx)) + ctx
+            _, _, probs = self.forward(np.array([padded_ctx], dtype=np.int32))
+            p = probs[0].copy()
+
+            # Disallow padding and BOS
+            p[self.pad_id] = 0.0
+            p[self.bos_id] = 0.0
+            # Disallow already taken courses
+            for past_id in history:
+                if past_id in range(self.vocab_size):
+                    p[past_id] = 0.0
+
+            if temperature != 1.0:
+                p = np.power(np.maximum(p, 1e-12), 1.0 / max(temperature, 0.01))
+
+            tot = np.sum(p)
+            if tot <= 0.0:
+                break
+            p /= tot
+
+            next_token = int(self.rng.choice(self.vocab_size, p=p))
+            if next_token == self.eos_id:
+                break
+
+            sampled_courses.append(self.id_to_token[next_token])
+            history.append(next_token)
+
+        return sampled_courses
+
 
 def milestone_2(
     sequences: Optional[List[List[str]]] = None,
@@ -842,5 +886,103 @@ def milestone_4(
 
 # --- Milestone 5: Analyze which course "itemsets" the model has learned.
 # Hint: Inspect the model's learned representations or attention patterns to identify frequently co-occurring course 'itemsets,' similar to analyzing market basket data.
-def milestone_5():  # TODO(milestone 5)
-    raise NotImplementedError("TODO(milestone 5)")
+
+from thilimarketbasket.mine import frequent_itemsets, rules
+
+
+def analyze_learned_itemsets(
+    model: Optional[CourseLanguageModel] = None,
+    n_samples: int = 500,
+    min_support: float = 0.03,
+    min_confidence: float = 0.30,
+) -> Dict[str, Any]:
+    """Mine and analyze frequent course itemsets and association rules learned by the model.
+
+    Generates course sequence histories from the language model and applies bitset Apriori
+    mining to discover which course bundles frequently co-occur, with their support, confidence, and lift.
+    """
+    if model is None:
+        model = get_default_model()
+
+    # Sample sequences autoregressively from the model
+    sampled_baskets: List[List[str]] = []
+    seeds = [None, "CS101", "PY101", "NET101", "WEB101", "MATH101"]
+    for i in range(n_samples):
+        seed = seeds[i % len(seeds)]
+        seq = model.sample_sequence(seed_course=seed, max_length=7, temperature=0.85)
+        if len(seq) >= 2:
+            sampled_baskets.append(seq)
+
+    # Mine frequent itemsets using bitset Apriori
+    itemsets_dict = frequent_itemsets(sampled_baskets, min_support=min_support, max_size=4)
+
+    # Format frequent itemsets
+    frequent_list = []
+    for itemset, support in itemsets_dict.items():
+        if len(itemset) >= 2:
+            items = sorted(list(itemset))
+            tracks = [COURSE_CATALOG[c]["track"] for c in items if c in COURSE_CATALOG]
+            dominant_track = max(set(tracks), key=tracks.count) if tracks else "Cross-Track"
+            frequent_list.append({
+                "items": items,
+                "size": len(items),
+                "support": round(float(support), 4),
+                "support_pct": round(float(support) * 100.0, 1),
+                "track": dominant_track,
+            })
+
+    frequent_list.sort(key=lambda x: (x["size"], x["support"]), reverse=True)
+
+    # Mine association rules
+    raw_rules = rules(itemsets_dict, min_confidence=min_confidence)
+    rule_list = []
+    for antecedent, consequent, support, confidence, lift in raw_rules:
+        ant_items = sorted(list(antecedent))
+        con_items = sorted(list(consequent))
+        rule_list.append({
+            "antecedent": ant_items,
+            "consequent": con_items,
+            "antecedent_str": " + ".join(ant_items),
+            "consequent_str": " + ".join(con_items),
+            "support": round(float(support), 4),
+            "confidence": round(float(confidence), 3),
+            "lift": round(float(lift), 2),
+        })
+
+    return {
+        "n_samples": len(sampled_baskets),
+        "min_support": min_support,
+        "min_confidence": min_confidence,
+        "frequent_itemsets": frequent_list,
+        "total_itemsets_found": len(frequent_list),
+        "association_rules": rule_list,
+        "total_rules_found": len(rule_list),
+    }
+
+
+def milestone_5(
+    model: Optional[CourseLanguageModel] = None,
+    min_support: float = 0.03,
+) -> Dict[str, Any]:
+    """Analyze which course 'itemsets' the model has learned.
+
+    Returns:
+        dict containing 'frequent_itemsets', 'association_rules', and summary metrics.
+    """
+    if model is None:
+        model = get_default_model()
+
+    analysis = analyze_learned_itemsets(
+        model=model,
+        n_samples=400,
+        min_support=min_support,
+        min_confidence=0.30,
+    )
+
+    return {
+        "status": "completed",
+        "total_itemsets": analysis["total_itemsets_found"],
+        "total_rules": analysis["total_rules_found"],
+        "frequent_itemsets": analysis["frequent_itemsets"],
+        "association_rules": analysis["association_rules"],
+    }
